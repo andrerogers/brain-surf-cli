@@ -149,7 +149,6 @@ show_success() {
     echo -e "${YELLOW}  2. Start your Brain WebSocket server${NC}"
     echo -e "${YELLOW}  3. Run 'brain interactive' for the best experience${NC}"
     echo ""
-    echo -e "${PURPLE}Made with ❤️  for the Brain multi-agent system${NC}"
 }
 
 main() {
