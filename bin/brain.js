@@ -75,19 +75,6 @@ program
       })
   )
   .addCommand(
-    new Command('disconnect')
-      .description('Disconnect from an MCP server')
-      .requiredOption('-i, --id <id>', 'Server ID')
-      .action(async (options) => {
-        try {
-          await brainClient.disconnectServer(options.id);
-          console.log(chalk.yellow(`⚠️  Disconnected from server: ${options.id}`));
-        } catch (error) {
-          handleError('Server disconnection failed', error);
-        }
-      })
-  )
-  .addCommand(
     new Command('list')
       .description('List all connected servers')
       .action(async () => {
@@ -144,10 +131,12 @@ program.parse();
 
 process.on('uncaughtException', (error) => {
   console.error(chalk.red('\n💥 Uncaught Exception:'), error.message);
+  brainClient.disconnect();
   process.exit(1);
 });
 
 process.on('unhandledRejection', (reason, promise) => {
   console.error(chalk.red('\n💥 Unhandled Rejection at:'), promise, 'reason:', reason);
+  brainClient.disconnect();
   process.exit(1);
 });
