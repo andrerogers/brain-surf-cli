@@ -118,20 +118,65 @@ program
 async function main() {
   const args = process.argv.slice(2);
   
-  // If no arguments, start REPL
+  // If no arguments, start REPL with auto-connection
   if (args.length === 0) {
     const repl = new BrainREPL(brainClient);
-    await repl.start();
+    await repl.start('ws://localhost:3789');
     return;
   }
   
-  // Parse arguments first to check for flags
-  program.parse();
-  const options = program.opts();
-  const query = program.args.join(' ');
+  // Check for flags first
+  const hasFlags = args.some(arg => arg.startsWith('-'));
   
-  // Handle print mode: brain "query" or brain -p "query"
-  if (options.print || (query && !process.argv.some(arg => arg.startsWith('-')))) {
+  if (hasFlags) {
+    // Parse arguments for flags
+    program.parse();
+    const options = program.opts();
+    const query = program.args.join(' ');
+    
+    // Handle continue mode
+    if (options.continue) {
+      const repl = new BrainREPL(brainClient, { continueSession: true });
+      await repl.start();
+      return;
+    }
+    
+    // Handle resume mode
+    if (options.resume) {
+      const repl = new BrainREPL(brainClient, { sessionId: options.resume });
+      await repl.start();
+      return;
+    }
+    
+    // Handle print mode with -p flag
+    if (options.print && query) {
+      try {
+        await brainClient.connect();
+        console.log(chalk.blue('Query:'), query);
+        await brainClient.sendQuery(query);
+        
+        // Wait for response and exit
+        brainClient.once('message', (message) => {
+          if (message.type === 'query_response') {
+            process.exit(0);
+          }
+        });
+        
+        // Timeout after 30 seconds
+        setTimeout(() => {
+          console.error(chalk.red('Query timeout'));
+          process.exit(1);
+        }, 30000);
+        
+      } catch (error) {
+        handleError('Query failed', error);
+        process.exit(1);
+      }
+      return;
+    }
+  } else {
+    // No flags, treat as direct query
+    const query = args.join(' ');
     try {
       await brainClient.connect();
       console.log(chalk.blue('Query:'), query);
@@ -156,24 +201,13 @@ async function main() {
     }
     return;
   }
-  
-  // Handle continue mode
-  if (options.continue) {
-    const repl = new BrainREPL(brainClient, { continueSession: true });
-    await repl.start();
-    return;
-  }
-  
-  // Handle resume mode
-  if (options.resume) {
-    const repl = new BrainREPL(brainClient, { sessionId: options.resume });
-    await repl.start();
-    return;
-  }
 }
 
-// Only run main if not using legacy commands
-if (!process.argv.some(arg => ['connect', 'interactive', 'server', 'tools', 'query', 'status'].includes(arg))) {
+// Only run main if not using legacy commands (check exact command matches only)
+const legacyCommands = ['connect', 'interactive', 'server', 'tools', 'query', 'status'];
+const isLegacyCommand = process.argv.length > 2 && legacyCommands.includes(process.argv[2]);
+
+if (!isLegacyCommand) {
   main().catch(error => {
     console.error(chalk.red('Error:'), error.message);
     process.exit(1);
