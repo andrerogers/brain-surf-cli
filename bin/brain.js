@@ -1,34 +1,25 @@
 #!/usr/bin/env node
 
 import chalk from 'chalk';
-import figlet from 'figlet';
-import gradient from 'gradient-string';
 import { Command } from 'commander';
 
-
 import { BrainClient } from '../lib/brain-client.js';
-import { InteractiveMode } from '../lib/interactive-mode.js';
-
-import { showWelcome, handleError } from '../lib/utils.js';
+import { BrainREPL } from '../lib/repl.js';
+import { handleError } from '../lib/utils.js';
 
 const program = new Command();
 const brainClient = new BrainClient();
 
-console.log(
-  gradient.retro.multiline(
-    figlet.textSync('Brain Surf CLI', {
-      font: 'ANSI Shadow',
-      horizontalLayout: 'default',
-      verticalLayout: 'default'
-    })
-  )
-);
-
 program
   .name('brain')
-  .description('CLI for the Brain')
-  .version('1.0.0', '-v, --version', 'display version number');
+  .description('CLI for interacting with Brain multi-agent system')
+  .version('1.0.0', '-v, --version', 'display version number')
+  .option('-p, --print', 'Print mode: execute query and exit')
+  .option('-c, --continue', 'Continue last conversation')
+  .option('-r, --resume <sessionId>', 'Resume specific session')
+  .argument('[query...]', 'Query to send to Brain');
 
+// Legacy connect command (kept for compatibility)
 program
   .command('connect')
   .description('Connect to Brain WebSocket server')
@@ -37,21 +28,22 @@ program
   .action(async (options) => {
     try {
       await brainClient.connect(options.url, parseInt(options.timeout));
-      console.log(chalk.green('✅ Successfully connected to Brain server!'));
+      console.log(chalk.green('Connected to Brain server'));
     } catch (error) {
       handleError('Connection failed', error);
     }
   });
 
+// Legacy interactive command (kept for compatibility)
 program
   .command('interactive')
   .alias('i')
-  .description('Start interactive mode with beautiful UI')
+  .description('Start interactive REPL mode')
   .option('-u, --url <url>', 'WebSocket server URL', 'ws://localhost:3789')
   .action(async (options) => {
     try {
-      const interactive = new InteractiveMode(brainClient);
-      await interactive.start(options.url);
+      const repl = new BrainREPL(brainClient);
+      await repl.start(options.url);
     } catch (error) {
       handleError('Interactive mode failed', error);
     }
@@ -68,7 +60,7 @@ program
       .action(async (options) => {
         try {
           await brainClient.connectServer(options.id, options.config);
-          console.log(chalk.green(`✅ Connected to server: ${options.id}`));
+          console.log(chalk.green(`Connected to server: ${options.id}`));
         } catch (error) {
           handleError('Server connection failed', error);
         }
@@ -122,21 +114,89 @@ program
     }
   });
 
-if (!process.argv.slice(2).length) {
-  showWelcome();
-  process.exit(0);
+// Handle Claude Code-style usage
+async function main() {
+  const args = process.argv.slice(2);
+  
+  // If no arguments, start REPL
+  if (args.length === 0) {
+    const repl = new BrainREPL(brainClient);
+    await repl.start();
+    return;
+  }
+  
+  // Parse arguments first to check for flags
+  program.parse();
+  const options = program.opts();
+  const query = program.args.join(' ');
+  
+  // Handle print mode: brain "query" or brain -p "query"
+  if (options.print || (query && !process.argv.some(arg => arg.startsWith('-')))) {
+    try {
+      await brainClient.connect();
+      console.log(chalk.blue('Query:'), query);
+      await brainClient.sendQuery(query);
+      
+      // Wait for response and exit
+      brainClient.once('message', (message) => {
+        if (message.type === 'query_response') {
+          process.exit(0);
+        }
+      });
+      
+      // Timeout after 30 seconds
+      setTimeout(() => {
+        console.error(chalk.red('Query timeout'));
+        process.exit(1);
+      }, 30000);
+      
+    } catch (error) {
+      handleError('Query failed', error);
+      process.exit(1);
+    }
+    return;
+  }
+  
+  // Handle continue mode
+  if (options.continue) {
+    const repl = new BrainREPL(brainClient, { continueSession: true });
+    await repl.start();
+    return;
+  }
+  
+  // Handle resume mode
+  if (options.resume) {
+    const repl = new BrainREPL(brainClient, { sessionId: options.resume });
+    await repl.start();
+    return;
+  }
 }
 
-program.parse();
+// Only run main if not using legacy commands
+if (!process.argv.some(arg => ['connect', 'interactive', 'server', 'tools', 'query', 'status'].includes(arg))) {
+  main().catch(error => {
+    console.error(chalk.red('Error:'), error.message);
+    process.exit(1);
+  });
+} else {
+  program.parse();
+}
 
 process.on('uncaughtException', (error) => {
-  console.error(chalk.red('\n💥 Uncaught Exception:'), error.message);
+  console.error(chalk.red('Uncaught Exception:'), error.message);
   brainClient.disconnect();
   process.exit(1);
 });
 
 process.on('unhandledRejection', (reason, promise) => {
-  console.error(chalk.red('\n💥 Unhandled Rejection at:'), promise, 'reason:', reason);
+  console.error(chalk.red('Unhandled Rejection:'), reason);
   brainClient.disconnect();
   process.exit(1);
+});
+
+// Handle Ctrl+C gracefully
+process.on('SIGINT', () => {
+  console.log('\nGoodbye!');
+  brainClient.disconnect();
+  process.exit(0);
 });
